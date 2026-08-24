@@ -1,23 +1,83 @@
-# Terraform Stacks demo
+# Terraform Stacks (possible bug) demo
 
-A monorepo demonstrating the Terraform Stacks composition pattern on HCP Terraform:
-a Terraform module, a reusable Stack component configuration wrapping that module,
-and two consuming Stacks — one sourcing the module directly in a `component` block,
-and one sourcing the component configuration through a `stack` block.
+A small example setup to illustrate that the **plan output** is different depending on how you consume a module.
+
+* [Consuming a module directly as a component](#consuming-a-module-directly-as-a-component) - in this case the plan output shows: inputs, resource changes, and outputs.
+* [Consuming a component configuration as a stack which in turn consumes the module directly](#consuming-a-component-configuration-as-a-stack-which-in-turn-consumes-the-module-directly) - in this case the plan output shows: inputs and outputs. **Resource changes are absent**, and **there is no way to get this information before you go on to apply**.
+
+## Consuming a module directly as a component
+
+Consuming a **module** directly in a `component` block from a stack, e.g.:
+
+```hcl
+component "random_integer" {
+  source  = "app.terraform.io/MY-ORG-NAME/random-integer/random"
+  version = "~> 1.0"
+
+  inputs = {
+    min = var.min
+    max = var.max
+  }
+
+  providers = {
+    random = provider.random.this
+  }
+}
+```
+
+When you run your stack the initial plan looks like this:
+
+![](./assets/plan-direct-consumer.png)
+
+## Consuming a component configuration as a stack which in turn consumes the module directly
+
+Consuming a **component configuration** in a `stack` block, which in turn consumes the module in a `component` block. In the component configuration (exact same code as in the example above):
+
+```hcl
+component "random_integer" {
+  source  = "app.terraform.io/MY-ORG-NAME/random-integer/random"
+  version = "~> 1.0"
+
+  inputs = {
+    min = var.min
+    max = var.max
+  }
+
+  providers = {
+    random = provider.random.this
+  }
+}
+```
+
+In the consuming stack:
+
+```hcl
+stack "random_integer" {
+  source  = "app.terraform.io/MY-ORG-NAME/random-integer"
+  version = "~> 1.0"
+
+  inputs = {
+    min = var.min
+    max = var.max
+  }
+}
+```
+
+When you run your stack the initial plan looks like this:
+
+![](./assets/plan-nested-consumer.png)
 
 ## Repository layout
 
 ```text
 .
 ├── modules/
-│   └── random-integer/       # Terraform module (random_integer resource, min/max inputs)
+│   └── random-integer/       # Terraform module
 ├── components/
 │   └── random-integer/       # Stack component configuration wrapping the module
 └── stacks/
     ├── direct/               # Stack consuming the module directly (component block)
-    │                         #   one deployment named "dummy"
     └── nested/               # Stack consuming the component configuration (stack block)
-                              #   one deployment named "default"
 ```
 
 ## How the pieces relate
@@ -47,46 +107,3 @@ graph TD
 4. **`stacks/nested`** is a Stack that consumes the published component
    configuration through a `stack` block. It has a single deployment named
    `default`.
-
-## Prerequisites
-
-- An HCP Terraform organization with access to Terraform Stacks and the
-  private registry.
-- Terraform CLI `>= 1.14` (for the `terraform stacks` commands).
-
-> [!NOTE]
-> Terraform Stacks requires a `.terraform-version` file alongside the root
-> `.tfcomponent.hcl` files. Both stack directories and the component
-> configuration pin `1.15.8` — adjust to the version you want HCP Terraform
-> to use.
-
-## Setup
-
-1. Replace the `MY-ORG-NAME` placeholder with your HCP Terraform organization
-   name everywhere in the repository:
-
-   ```shell
-   grep -rl 'MY-ORG-NAME' --include='*.hcl' --include='*.md' . | xargs sed -i '' 's/MY-ORG-NAME/your-org-name/g'
-   ```
-
-2. Publish `modules/random-integer` to your private module registry as
-   `random-integer` for provider `random`, tagged `1.0.0`.
-3. Publish `components/random-integer` to your private registry as a Stack
-   component configuration named `random-integer`, version `1.0.0`.
-4. Create two Stacks from this repository, pointing at the `stacks/direct` and
-   `stacks/nested` directories respectively.
-
-## Local validation
-
-Both stack configurations can be validated locally once the registry artifacts
-are published and you are logged in with `terraform login`:
-
-```shell
-cd stacks/direct
-terraform stacks init
-terraform stacks validate
-
-cd ../nested
-terraform stacks init
-terraform stacks validate
-```
